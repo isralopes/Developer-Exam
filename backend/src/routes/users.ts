@@ -39,32 +39,48 @@ router.get("/", async (req: Request, res: Response) => {
   }
 });
 
-// GET single user by ID
-router.get("/:id", async (req: Request, res: Response) => {
+// GET single user by ID (optimized - consistent with aggregation pattern)
+router.get('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const userResult = await pool.query("SELECT * FROM users WHERE id = $1", [
-      id,
-    ]);
 
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    const user = userResult.rows[0];
-
-    // Fetch user's posts
-    const postsResult = await pool.query(
-      "SELECT * FROM posts WHERE user_id = $1 ORDER BY created_at DESC",
+    const result = await pool.query(
+      `
+      SELECT
+        u.id,
+        u.name,
+        u.email,
+        u.department,
+        u.created_at,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', p.id,
+              'user_id', p.user_id,
+              'title', p.title,
+              'content', p.content,
+              'created_at', p.created_at
+            )
+            ORDER BY p.created_at DESC
+          ) FILTER (WHERE p.id IS NOT NULL),
+          '[]'::json
+        ) AS posts
+      FROM users u
+      LEFT JOIN posts p ON p.user_id = u.id
+      WHERE u.id = $1
+      GROUP BY u.id
+      `,
       [id]
     );
 
-    user.posts = postsResult.rows;
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-    res.json(user);
+    res.json(result.rows[0]);
   } catch (error) {
-    console.error("Error fetching user:", error);
-    res.status(500).json({ error: "Failed to fetch user" });
+    console.error('Error fetching user:', error);
+    res.status(500).json({ error: 'Failed to fetch user' });
   }
 });
 
